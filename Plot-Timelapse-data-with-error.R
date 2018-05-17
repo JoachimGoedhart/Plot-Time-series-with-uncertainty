@@ -6,7 +6,7 @@
 
 
 # Created by: 
-# Joachim Goedhart, @joachimgoedhart, 2017
+# Joachim Goedhart, @joachimgoedhart, 2018
 
 #Requires the packages tidyr, ggplot2, magrittr, dplyr
 
