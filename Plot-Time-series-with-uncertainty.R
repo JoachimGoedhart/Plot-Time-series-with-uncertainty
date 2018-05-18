@@ -1,20 +1,20 @@
 # Script that:
 # Reads csv file with header, first column is time. Assumes that each of the other columns
 # represents a single time-dependent measurement (e.g. the reponse of a single cell)
-# Caluclates summary statistics per time-point (mean, sd, 95%CI)
+# Caluclates summary statistics per time-point (mean, sd, sem, 95%CI)
 # Plots time dependent data: single time-dependent measurements, average and error (95%CI)
 
 # Created by: 
 # Joachim Goedhart, @joachimgoedhart, 2018
 
-#Requires the packages tidyr, ggplot2, magrittr, dplyr
+#Requires the packages tidyr, ggplot2
 
 require(tidyr)
 require(ggplot2)
 
 
 ######################## Set some parameters #########################
-#Confidence level, typically 95%
+#Confidence level, typically 95% = 0.95
 Conf_level <-  0.95
 
 #Start and end point of stimulation
