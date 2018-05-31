@@ -1,0 +1,2136 @@
+getwd()
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_level = 0.95#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary) +#
+ggtitle("Median and 95%CI")  +ylab("Value [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle("Difference of medians")+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+range <- c(1:1000)
+range
+quantile(range, probs=5)
+quantile(range, probs=0.025)
+quantile(range, probs=0.975)
+quantile(range, probs=0.5)
+range <- c(1:1001)
+quantile(range, probs=0.5)
+quantile(range, probs=0.975)
+range <- c(1:999)
+quantile(range, probs=0.5)
+quantile(range, probs=0.975)
+quantile(range, probs=0.025)
+series <- c(1:10)
+c
+serialize
+series
+??quantile
+quantile(series)
+quantile(series, type=6)
+quantile(series, type=5)
+quantile(series, type=4)
+quantile(series, type=3)
+quantile(series, type=1)
+series <- c(1:9)
+quantile(series, type=5)
+quantile(series, type=3)
+quantile(series, type=1)
+quantile(series, type=4)
+quantile(series)
+series
+??quantile
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 95#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle("Difference of medians")+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 99#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle("Difference of medians")+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 95#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle("Difference of medians")+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 50#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle("Difference of medians")+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 99#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle("Difference of medians")+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 99.9#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle("Difference of medians")+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 99#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle("Difference of medians")+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 95#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle("Difference of medians")+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 95#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle(paste("Difference and ",Confidence_Percentage,"%CI",sep=""))+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+# Script that:#
+# Reads csv file (with header), assuming the first serie is the control#
+# Calculates median and 95%CI by a percentile bootstrap#
+# Calculates the difference between medians and the 95%CI, reflecting the magnitude and uncertainty of the difference#
+# Plots: (A) the data, the median and 95% CI (B) median difference and the 95%CI + the distribution of median differences#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#Requires the packages ggplot2, gridExtra, tidyr#
+require(ggplot2)#
+require(gridExtra)#
+require(tidyr)#
+#
+#Requires a new geom for ggplot2 that plots half of a violin plot (for the distribution of bootstrapped differences)#
+source("surfdrive/R-project/Effect-Median/geom_flat_violin.R")#
+#
+#Function that resamples a vector (with replacement) and calculates the median value#
+boot_median = function(x) {#
+  median(sample(x, replace = TRUE))#
+}#
+#
+#Number of bootstrap samples#
+nsteps=1000#
+#
+#Confidence level#
+Confidence_Percentage = 99#
+Confidence_level = Confidence_Percentage/100#
+#
+alpha=1-Confidence_level#
+lower_percentile=(1-Confidence_level)/2#
+upper_percentile=1-((1-Confidence_level)/2)#
+#
+i=0#
+#
+#Read the (tidy) data in csv format#
+df_raw_wide <- read.csv("surfdrive/R-project/Effect-Median/Data_wide.csv")#
+#
+#Force the first column to be labeled as "Control"#
+colnames(df_raw_wide)[1] <- "Control"#
+#
+#Convert the wide data to a long format (and remove NA)#
+df_raw_data <-  na.omit(gather(df_raw_wide, Condition, value))#
+#Generate a dataframe that keeps a summary of the data#
+df_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), n=tapply(df_raw_data$value, df_raw_data$Condition, length), median=tapply(df_raw_data$value, df_raw_data$Condition, median))#
+#
+#Generate a dataframe that collects all bootstrapped median values#
+df_all_new_medians <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+######################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+#Perform the resampling nsteps number of times (typically 1,000-10,000x)#
+for (i in 1:nsteps) {#
+#
+	#Caclulate the median from a boostrapped sample (resampled_median) and add to the dataframe#
+	df_boostrapped_median <- data.frame(Condition=levels(factor(df_raw_data$Condition)), resampled_median=tapply(df_raw_data$value, df_raw_data$Condition, boot_median), id=i)#
+	#Add the new median to a datafram that collects all the resampled median values#
+	df_all_new_medians <- bind_rows(df_all_new_medians, df_boostrapped_median)#
+#
+}#
+#Uncomment to plot result of the bootsrap#
+#ggplot(df_all_new_medians, aes(Condition, resampled_median)) + geom_flat_violin(aes(fill=Condition), position = position_nudge(x = .2, y = 0))#
+#Calculate the confidence interval of the boostrapped medians, based on percentiles, and add to the dataframe that summarizes the data#
+df_summary$ci_median_hi <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=upper_percentile)#
+df_summary$ci_median_lo <- tapply(df_all_new_medians$resampled_median, df_all_new_medians$Condition, quantile, probs=lower_percentile)#
+######################################################################################
+############ Generate dataframe with differences between the Median and 95%CI  #######
+#
+#Order by Condition#
+#df_all_new_medians[order(df_all_new_medians$Condition),]#
+#
+#Convert the boostrapped dataset from long to wide format#
+df_spread <- spread(df_all_new_medians, key=Condition, value=resampled_median)#
+#
+#Subtract the Column with " Control" from the other columns and move these 'differences' into a new dataframe#
+df_spread_differences <- df_spread[,2:ncol(df_spread)] - df_spread[,"Control"]#
+#
+#Convert the dataframe with differences between medians into a long format#
+df_differences <- gather(df_spread_differences, Condition, diff_median)#
+#
+#Calculate the summary of the differences and put these values in a dataframe 'df_diff_summary'#
+df_diff_summary <- data.frame(Condition=levels(factor(df_raw_data$Condition)), diff_median=tapply(df_differences$diff_median, df_differences$Condition, median))#
+#
+#Determine the CI of the differences, based on percentiles, and add to the dataframe that summarizes the differences#
+df_diff_summary$ci_median_hi <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=upper_percentile)#
+df_diff_summary$ci_median_lo <- tapply(df_differences$diff_median, df_differences$Condition, quantile, probs=lower_percentile)#
+#Sort dataframe Conditions according to median value#
+df_summary$Condition <- reorder (df_summary$Condition, df_summary$median)#
+df_raw_data$Condition <- reorder (df_raw_data$Condition, df_raw_data$value, median)#
+#
+#Sort dataframe Conditions according to median difference#
+df_diff_summary$Condition <- reorder (df_diff_summary$Condition, df_diff_summary$diff_median)#
+df_differences$Condition <- reorder (df_differences$Condition, df_differences$diff_median)#
+#
+##################### Generate plots for output ####################
+#
+######### PLOT with raw data + median and Confidence Interval #########
+medianplot <- ggplot(df_summary, aes(x = Condition, y = median, color=Condition))+geom_jitter(data = df_raw_data, aes(x=Condition, y=value), position=position_jitter(0.3), cex=1, alpha=0.4)+#
+ geom_linerange(aes(ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_summary)+#
+geom_point(aes(y = median), shape = 21,color = "black",fill=NA,size = 3, data = df_summary)+#
+ggtitle(paste("Median and ",Confidence_Percentage,"%CI",sep=""))  +#
+ylab("Value [-]")+theme_light(base_size = 14) + #
+theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+theme(legend.position="none")+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.02,0.3)+#
+coord_flip()#
+#
+########### PLOT with distribution of differences, median difference and Confidence Interval #########
+effectplot <- ggplot(df_differences, aes(x = Condition, y = diff_median))+#
+geom_flat_violin(aes(x=Condition, fill=Condition),position = position_nudge(x = 0, y = 0), color=NA,scale = "width", alpha =0.7,data = df_differences)+ geom_linerange(aes(y= diff_median, ymin = ci_median_lo, ymax = ci_median_hi), color="black", size =1, data = df_diff_summary)+#
+geom_point(aes(y = diff_median), shape = 21,color = "black",fill=NA,size = 3,data = df_diff_summary)+#
+#
+geom_hline(yintercept = 0, col = "black", size = .5) +#
+ggtitle(paste("Difference and ",Confidence_Percentage,"%CI",sep=""))+ylab("Difference [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))+#
+#Set the axis limits here - autoscale if not set#
+#ylim(-0.05,0.3)+#
+coord_flip()#
+ grid.arrange(medianplot, effectplot, ncol=2, nrow=1)
+getwd()
+require(tidyr)
+require(ggplot2)
+df_wide <- read.csv("FRET-ratio-wide.csv", na.strings = "")
+df_tidy <- gather(df_wide, Cell, Ratio, -Time)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(color=Cell), size=0.8) + geom_point(size = 0.5, alpha=0.3)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(color=Cell), size=0.8) + geom_point(size = 1, alpha=0.3)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(color=Cell), size=0.8) + geom_point(size = 1, alpha=0.5)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_point(alpha=0.3, size=0.5)+ geom_line(aes(color=Cell), size=0.8)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(color=Cell), size=0.8)+ geom_point(alpha=0.3, size=0.5)
+df_summary <- data.frame(condition=levels(factor(df_tidy$Time)), n=tapply(df_tidy$Ratio, df_tidy$Time, length), mean=tapply(df_tidy$Ratio, df_tidy$Time, mean))
+head(df_summary)
+sd <- tapply(df_tidy$Ratio, df_tidy$Time, sd)
+sem <- sd/sqrt(df_summary$n-1)
+head(df_summary)
+df_summary$sd <- tapply(df_tidy$Ratio, df_tidy$Time, sd)
+df_summary$sem <- sd/sqrt(df_summary$n-1)
+head(df_summary)
+df_summary$CI_lower <- df_summary$mean + qt((1-0.95)/2, df=df_summary$n-1)*df_summary$sem#
+df_summary$CI_upper <- df_summary$mean - qt((1-0.95)/2, df=df_summary$n-1)*df_summary$sem
+head(df_summary)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)
+head(df_tidy)
+df_summary <- data.frame(Time=levels(factor(df_tidy$Time)), n=tapply(df_tidy$Ratio, df_tidy$Time, length), mean=tapply(df_tidy$Ratio, df_tidy$Time, mean))
+df_summary
+df_summary$sd <- tapply(df_tidy$Ratio, df_tidy$Time, sd)#
+df_summary$sem <- sd/sqrt(df_summary$n-1)
+df_summary$CI_lower <- df_summary$mean + qt((1-0.95)/2, df=df_summary$n-1)*df_summary$sem#
+df_summary$CI_upper <- df_summary$mean - qt((1-0.95)/2, df=df_summary$n-1)*df_summary$sem
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)
+ggplot(df_tidy, aes(x=Time)) + geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(data=df_summary, aes(x=Time, y=mean), size=1, alpha=0.8)
+require(dplyr)
+df.summary <- df_tidy %>% group_by(Time) %>% summarise(mean = mean(Ratio, na.rm = TRUE),#
+            											sd = sd(Ratio, na.rm = TRUE),#
+            											n = n()) %>%#
+  		mutate(sem = sd / sqrt(n - 1),#
+        CI_lower = mean + qt((1-0.95)/2, n - 1) * sem,#
+        CI_upper = mean - qt((1-0.95)/2, n - 1) * sem)
+df.summary
+ggplot(df_tidy, aes(x=Time)) +#
+#
+#### plot individual measurements #####
+#	geom_line(aes(y=Ratio, group=Cell), size=0.25, alpha=0.6) +#
+#
+#### plot average response over time #####
+	geom_line(data=df.summary, aes(y=mean), size=1, alpha=0.8) +#
+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df.summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2 , alpha=0.1)
+head(df_summary)
+ggplot(df_tidy, aes(x=Time)) +#
+#
+#### plot individual measurements #####
+#	geom_line(aes(y=Ratio, group=Cell), size=0.25, alpha=0.6) +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8) +#
+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2 , alpha=0.1)
+ggplot(df_summary, aes(x=Time)) +	geom_line(aes(y=mean), size=1, alpha=0.8) +	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2 , alpha=0.1)
+ggplot(df_summary, aes(x=Time, y=mean)) +	geom_line()
+ggplot(df_summary, x=Time, y=mean) +	geom_line()
+ggplot(df.summary, aes(x=Time, y=mean)) +	geom_line()
+head(df_summary)
+df_summary <- data.frame(Time=levels(factor(df_tidy$Time)), n=tapply(df_tidy$Ratio, df_tidy$Time, length), mean=tapply(df_tidy$Ratio, df_tidy$Time, mean))
+df_summary
+df_summary <- data.frame(Time=levels(df_tidy$Time), n=tapply(df_tidy$Ratio, df_tidy$Time, length), mean=tapply(df_tidy$Ratio, df_tidy$Time, mean))
+df_summary <- data.frame(Time=factor(df_tidy$Time), n=tapply(df_tidy$Ratio, df_tidy$Time, length), mean=tapply(df_tidy$Ratio, df_tidy$Time, mean))
+df_summary <- data.frame(Time=df_tidy$Time, n=tapply(df_tidy$Ratio, df_tidy$Time, length), mean=tapply(df_tidy$Ratio, df_tidy$Time, mean))
+df_tidy$Time
+df_summary <- data.frame(Time=df_wide$Time, n=tapply(df_tidy$Ratio, df_tidy$Time, length), mean=tapply(df_tidy$Ratio, df_tidy$Time, mean))
+df_summary$sd <- tapply(df_tidy$Ratio, df_tidy$Time, sd)
+df_summary$sem <- sd/sqrt(df_summary$n-1)
+head(df_summary)
+df_summary$CI_lower <- df_summary$mean + qt((1-0.95)/2, df=df_summary$n-1)*df_summary$sem
+df_summary$CI_upper <- df_summary$mean - qt((1-0.95)/2, df=df_summary$n-1)*df_summary$sem
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(data=df_summary, aes(x=Time, y=mean), size=1, alpha=0.8)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_summary, aes(x=Time, y=mean), size=1, alpha=0.8)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_summary, aes(x=Time, y=mean), size=1, alpha=0.8)+ geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2 , alpha=0.1)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2 , alpha=0.1)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2 , alpha=0.1)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.1)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(df_tidy, aes(color=Cell), size=0.8)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(df_tidy, aes(x=Time, y=Ratio, color=Cell), size=0.8)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, color=Cell), size=0.8)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, color=Cell), size=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, color=Cell), size=0.4)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), size=0.4)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color=grey, size=0.4)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey", size=0.4)
+ggplot(df_summary, aes(x=Time, y=mean))+ geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey", size=0.4) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey", size=0.4)
+ggplot(df_summary, aes(x=Time, y=mean))+ geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey", size=0.4) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey", size=0.4)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell))
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey", size=0.4) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean))  + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.3, fill="black")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.3, fill="black")+ theme_light(base_size = 16)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ggtitle("Timeseries") + ylab("YFP/CFP ratio [-]")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP[-]")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]") + xlab("Time [s]")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") + ggtitle("Activation of Gαq by Histamine")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") + ggtitle("Activation of Gq by Histamine")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") + ggtitle("Activation of a G-protein by G-protein coupled receptor")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") + ggtitle("Activation of Gq by the Hisatnmine receptor")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") + ggtitle("Gq activation by the Histamine receptor")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") + ggtitle("G-protein activation by histamine")
+#### Command to prepare the plot #####
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+#	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2, alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  # set the title#
+  ggtitle("Timeseries") +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16) +#
+  # Style the axis (font size)#
+#  theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+  # Set layout of the graph #
+ # theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+  # Set label of x- and y-axis#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+  # Set aspect ratio of the graph n/n = square#
+  theme(aspect.ratio=4/4)
+#### Command to prepare the plot #####
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2, alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  # set the title#
+  ggtitle("Timeseries") +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16) +#
+  # Style the axis (font size)#
+#  theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+  # Set layout of the graph #
+ # theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+  # Set label of x- and y-axis#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+  # Set aspect ratio of the graph n/n = square#
+  theme(aspect.ratio=4/4)
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+#	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2, alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  # set the title#
+  ggtitle("Timeseries") +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16) +#
+  # Style the axis (font size)#
+#  theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+  # Set layout of the graph #
+ # theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+  # Set label of x- and y-axis#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+  # Set aspect ratio of the graph n/n = square#
+  theme(aspect.ratio=4/4)
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+#	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2, alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  # set the title#
+  ggtitle("Timeseries; mean & 95%CI") +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16) +#
+  # Style the axis (font size)#
+#  theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+  # Set layout of the graph #
+ # theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+  # Set label of x- and y-axis#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+  # Set aspect ratio of the graph n/n = square#
+  theme(aspect.ratio=4/4)
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+#	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2, alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  # set the title#
+  ggtitle("Timeseries; average & 95%CI") +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16) +#
+  # Style the axis (font size)#
+#  theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+  # Set layout of the graph #
+ # theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+  # Set label of x- and y-axis#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+  # Set aspect ratio of the graph n/n = square#
+  theme(aspect.ratio=4/4)
+#### Command to prepare the plot #####
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2, alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  # set the title#
+  ggtitle("Timeseries; average & 95%CI") +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16) +#
+  # Style the axis (font size)#
+#  theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+  # Set layout of the graph #
+ # theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+  # Set label of x- and y-axis#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+  # Set aspect ratio of the graph n/n = square#
+  theme(aspect.ratio=4/4)
+qplot(data=df_tidy, x=Time, y=Ratio)
+qplot(data=df_tidy, x=Time, y=Ratio, geom='line')
+qplot(data=df_tidy, x=Time, y=Ratio, geom='line', group=Cell)
+qplot(data=df_tidy, x=Time, y=Ratio)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_point(alpha=0.3, size=0.5)+ geom_line(aes(color=Cell), size=0.8)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(color=Cell), size=0.8)+ geom_point(alpha=0.3, size=0.5)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_point(alpha=0.3, size=0.8)+ geom_line(aes(color=Cell), size=0.8)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(color=Cell), size=0.8)+ geom_point(alpha=0.3, size=0.8)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_summary, aes(x=Time, y=mean), size=1, alpha=0.8)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(color=Cell), size=0.8)+ geom_point(alpha=0.3, size=0.8)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") + ggtitle("G-protein activation by histamine")
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", color="black", size=0.2, alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  # set the title#
+  ggtitle("Timeseries; average & 95%CI") +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16) +#
+  # Style the axis (font size)#
+#  theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+  # Set layout of the graph #
+ # theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+  # Set label of x- and y-axis#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+  # Set aspect ratio of the graph n/n = square#
+  theme(aspect.ratio=4/4)
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  # set the title#
+  ggtitle("Timeseries; average & 95%CI") +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16) +#
+  # Style the axis (font size)#
+#  theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+  # Set layout of the graph #
+ # theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+  # Set label of x- and y-axis#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+  # Set aspect ratio of the graph n/n = square#
+  theme(aspect.ratio=4/4)
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16) +
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+  ## Set the Y-axis scale, remove for autoscale#
+#
+ coord_cartesian(ylim = c(0.5, 1.1)) +#
+  ## Set theme&basic font#
+  theme_light(base_size = 16)
+#### Command to prepare the plot #####
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="green")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell))
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_summary, aes(x=Time, y=mean), size=1, alpha=0.8)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell))
+df_tidy
+# Script that:#
+# Reads csv file (with header)#
+# Calculates median and 95%CI based on (i) the IQR and (ii) bootstrap#
+# Plots a summary of the data: median and 95% CI#
+# Shows a table with relevant statistics#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#
+#Function to calculate the median (for bootstrapping)#
+samplemedian <- function (x, d) {#
+	return(median(x[d]))}#
+#
+#Requires the packages ggplot2, gridExtra, boot, mmargrittr, dplyr, purrr, tidy#
+#
+require(ggplot2)#
+require(gridExtra)#
+require(boot)#
+require(margrittr)#
+require(dplyr)#
+require(purrr)#
+require(tidy)#
+#Read the (tidy) data in csv format#
+my_data <- read.csv("surfdrive/R-project/CI-median/Data_tidy.csv")#
+######################################################################################
+################## Calculate Median and ordinary 95%CI based on IQR ##################
+#
+#Add 'condition', number of measurements and median value to the dataframe with summary stats #
+my_data_quant <- data.frame(Condition=levels(my_data$Condition), n=tapply(my_data$ratio, my_data$Condition, length), median=tapply(my_data$ratio, my_data$Condition, median))#
+#Add the interquartile range (IQR) to the dataframe#
+my_data_quant$IQR <- tapply(my_data$ratio, my_data$Condition, IQR)#
+#
+#Add the 95% CI of the median to the dataframe. Approximation is 1.58*IQR divided by square root of n#
+my_data_quant$lower_ci <- my_data_quant$median - my_data_quant$IQR*1.58/sqrt(my_data_quant$n)#
+my_data_quant$upper_ci <- my_data_quant$median + my_data_quant$IQR*1.58/sqrt(my_data_quant$n)#
+#
+#Sort#
+#my_data_quant$Condition  = with(my_data_quant, reorder(Condition, median))#
+#plot#
+quantplot <- ggplot(my_data_quant, aes(x = Condition, y = median)) +   geom_linerange(aes(ymin = lower_ci, ymax = upper_ci), size =2, color = "grey60", data = my_data_quant)+ geom_point(aes(y = median), color = "grey20", size = 4, data = my_data_quant)+ ggtitle("Median and 95%CI (quantiles)")+ ylim(0.65,0.95)+ylab("Value [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))#
+################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+######################## Largely based on code by Peter Kamerman: https://www.painblogr.org/2017-10-18-purrring-through-bootstraps.html#
+my_data_nested <- my_data %>% group_by(Condition) %>% nest()#
+#
+#Add boostrapped median values to my_nested_data#
+my_data_nested %<>% mutate(booted = purrr::map(.x = data, ~ boot(data = .x$ratio,statistic = samplemedian, R = 10000, stype = "i")))#
+#
+#Add boostrapped 95%CI around median values to my_nested_data, 95%CI determined based on "perc" & "bca"#
+my_data_nested %<>% mutate(booted_ci = purrr::map(.x = booted, ~ boot::boot.ci(.x,conf = 0.95, type = c("perc", "bca"))))#
+#Get the stats (median and 95% CI) from the nested dataframe into a regular dataframe (my_data_booted_summary) with 95%CI determined by "bca" or "perc" method#
+my_data_booted_summary <- my_data_nested %>% mutate(median = purrr::map(.x = booted_ci, ~ .x$t0),#
+	lower_ci_bca = purrr::map(.x = booted_ci,~ .x$bca[[4]]),	#
+	upper_ci_bca = purrr::map(.x = booted_ci,~ .x$bca[[5]]),#
+	lower_ci_perc = purrr::map(.x = booted_ci,~ .x$perc[[4]]),#
+	upper_ci_perc = purrr::map(.x = booted_ci,~ .x$perc[[5]])) %>%  dplyr::select(-data, -booted, -booted_ci) %>% tidyr::unnest()#
+#plot median and 95% CI determined by percentile method#
+bootplot <- ggplot(my_data_booted_summary, aes(x = Condition, y = median)) +   geom_linerange(aes(ymin = lower_ci_perc, ymax = upper_ci_perc), size =2, color = "grey60", data = my_data_booted_summary)+ geom_point(aes(y = median), color = "grey20", size = 4, data = my_data_booted_summary) + ggtitle("Median and 95%CI (bootstrap)") + ylim(0.65,0.95) +ylab("Value [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))#
+#
+################################################################################
+########################## Prepare tables for display ##########################
+#
+#Define the parameters that will be displayed in the table (below quantplot)#
+df_table_quant <- t(data.frame(median=my_data_quant$median, CI_lo=my_data_quant$lower_ci, CI_hi=my_data_quant$upper_ci))#
+colnames(df_table_quant) <- c('Control','01','02')#
+#
+#Define the parameters that will be displayed in the table (below bootplot)#
+df_table_boot <- t(data.frame(median=my_data_booted_summary$median, CI_lo= my_data_booted_summary$lower_ci_perc, CI_hi= my_data_booted_summary$upper_ci_perc))#
+colnames(df_table_boot) <- c('Control','01','02')#
+#
+#Create the table with defined font size set by theme = ttheme_default(8)#
+tbl_quant <- tableGrob(round(df_table_quant, digits=2), theme = ttheme_default(8))#
+tbl_boot <- tableGrob(round(df_table_boot, digits=2), theme = ttheme_default(8))#
+#
+#Set the table width (defined by 1/ncol(tbl))#
+tbl_quant$widths <- unit(rep(0.9/ncol(tbl_quant), ncol(tbl_quant)), "npc")#
+tbl_boot$widths <- unit(rep(0.9/ncol(tbl_boot), ncol(tbl_boot)), "npc")#
+#
+###############################################################################
+########################## Display Plots and Tables ###########################
+#### Arrange the plots and tables on a single page and plot #####
+grid.arrange(quantplot, bootplot, tbl_quant, tbl_boot, ncol=2, nrow=2, as.table=TRUE, heights=c(3,1))#
+###############################################################################
+###### Uncomment to plot the data (dotplot), boxplot and median±CI#
+#ggplot(data =my_data_booted_summary, aes(x = Condition, y = median)) + geom_linerange(data = my_data_booted_summary, aes(x=Condition, ymin=lower_ci_perc, ymax=upper_ci_perc), size=10, alpha=0.3)+ geom_boxplot(data =my_data, aes(x = Condition, y = ratio), fill = NA, notch = TRUE, outlier.color=NA, width=0.4, size=0.6)+ geom_point(data = my_data_booted_summary, aes(x=Condition, y = median), color = "white", size = 4)+ geom_jitter(data = my_data, aes(x=Condition, y=ratio), position=position_jitter(0.1), cex=1, color="grey40")  + ggtitle("Boxplot & data") + ylim(0.5,1.5)+ylab("Value [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))
+my_data <- read.csv("surfdrive/R-project/CI-median/Data_tidy.csv")
+my_data_quant <- data.frame(Condition=levels(my_data$Condition), n=tapply(my_data$ratio, my_data$Condition, length), median=tapply(my_data$ratio, my_data$Condition, median))#
+#Add the interquartile range (IQR) to the dataframe#
+my_data_quant$IQR <- tapply(my_data$ratio, my_data$Condition, IQR)#
+#
+#Add the 95% CI of the median to the dataframe. Approximation is 1.58*IQR divided by square root of n#
+my_data_quant$lower_ci <- my_data_quant$median - my_data_quant$IQR*1.58/sqrt(my_data_quant$n)#
+my_data_quant$upper_ci <- my_data_quant$median + my_data_quant$IQR*1.58/sqrt(my_data_quant$n)#
+#
+#Sort#
+#my_data_quant$Condition  = with(my_data_quant, reorder(Condition, median))#
+#plot#
+quantplot <- ggplot(my_data_quant, aes(x = Condition, y = median)) +   geom_linerange(aes(ymin = lower_ci, ymax = upper_ci), size =2, color = "grey60", data = my_data_quant)+ geom_point(aes(y = median), color = "grey20", size = 4, data = my_data_quant)+ ggtitle("Median and 95%CI (quantiles)")+ ylim(0.65,0.95)+ylab("Value [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))
+my_data_nested <- my_data %>% group_by(Condition) %>% nest()#
+#
+#Add boostrapped median values to my_nested_data#
+my_data_nested %<>% mutate(booted = purrr::map(.x = data, ~ boot(data = .x$ratio,statistic = samplemedian, R = 10000, stype = "i")))#
+#
+#Add boostrapped 95%CI around median values to my_nested_data, 95%CI determined based on "perc" & "bca"#
+my_data_nested %<>% mutate(booted_ci = purrr::map(.x = booted, ~ boot::boot.ci(.x,conf = 0.95, type = c("perc", "bca"))))#
+#Get the stats (median and 95% CI) from the nested dataframe into a regular dataframe (my_data_booted_summary) with 95%CI determined by "bca" or "perc" method#
+my_data_booted_summary <- my_data_nested %>% mutate(median = purrr::map(.x = booted_ci, ~ .x$t0),#
+	lower_ci_bca = purrr::map(.x = booted_ci,~ .x$bca[[4]]),	#
+	upper_ci_bca = purrr::map(.x = booted_ci,~ .x$bca[[5]]),#
+	lower_ci_perc = purrr::map(.x = booted_ci,~ .x$perc[[4]]),#
+	upper_ci_perc = purrr::map(.x = booted_ci,~ .x$perc[[5]])) %>%  dplyr::select(-data, -booted, -booted_ci) %>% tidyr::unnest()#
+#plot median and 95% CI determined by percentile method#
+bootplot <- ggplot(my_data_booted_summary, aes(x = Condition, y = median)) +   geom_linerange(aes(ymin = lower_ci_perc, ymax = upper_ci_perc), size =2, color = "grey60", data = my_data_booted_summary)+ geom_point(aes(y = median), color = "grey20", size = 4, data = my_data_booted_summary) + ggtitle("Median and 95%CI (bootstrap)") + ylim(0.65,0.95) +ylab("Value [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))
+require(ggplot2)#
+require(gridExtra)#
+require(boot)#
+require(margrittr)#
+require(dplyr)#
+require(purrr)#
+require(tidyr)
+require(magrittr)
+require(ggplot2)#
+require(gridExtra)#
+require(boot)#
+require(magrittr)#
+require(dplyr)#
+require(purrr)#
+require(tidyr)
+#Read the (tidy) data in csv format#
+my_data <- read.csv("surfdrive/R-project/CI-median/Data_tidy.csv")#
+######################################################################################
+################## Calculate Median and ordinary 95%CI based on IQR ##################
+#
+#Add 'condition', number of measurements and median value to the dataframe with summary stats #
+my_data_quant <- data.frame(Condition=levels(my_data$Condition), n=tapply(my_data$ratio, my_data$Condition, length), median=tapply(my_data$ratio, my_data$Condition, median))#
+#Add the interquartile range (IQR) to the dataframe#
+my_data_quant$IQR <- tapply(my_data$ratio, my_data$Condition, IQR)#
+#
+#Add the 95% CI of the median to the dataframe. Approximation is 1.58*IQR divided by square root of n#
+my_data_quant$lower_ci <- my_data_quant$median - my_data_quant$IQR*1.58/sqrt(my_data_quant$n)#
+my_data_quant$upper_ci <- my_data_quant$median + my_data_quant$IQR*1.58/sqrt(my_data_quant$n)#
+#
+#Sort#
+#my_data_quant$Condition  = with(my_data_quant, reorder(Condition, median))#
+#plot#
+quantplot <- ggplot(my_data_quant, aes(x = Condition, y = median)) +   geom_linerange(aes(ymin = lower_ci, ymax = upper_ci), size =2, color = "grey60", data = my_data_quant)+ geom_point(aes(y = median), color = "grey20", size = 4, data = my_data_quant)+ ggtitle("Median and 95%CI (quantiles)")+ ylim(0.65,0.95)+ylab("Value [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))#
+################################################################################
+######################## Calculate Median and 95%CI by bootstrap ####################
+######################## Largely based on code by Peter Kamerman: https://www.painblogr.org/2017-10-18-purrring-through-bootstraps.html#
+my_data_nested <- my_data %>% group_by(Condition) %>% nest()#
+#
+#Add boostrapped median values to my_nested_data#
+my_data_nested %<>% mutate(booted = purrr::map(.x = data, ~ boot(data = .x$ratio,statistic = samplemedian, R = 10000, stype = "i")))#
+#
+#Add boostrapped 95%CI around median values to my_nested_data, 95%CI determined based on "perc" & "bca"#
+my_data_nested %<>% mutate(booted_ci = purrr::map(.x = booted, ~ boot::boot.ci(.x,conf = 0.95, type = c("perc", "bca"))))#
+#Get the stats (median and 95% CI) from the nested dataframe into a regular dataframe (my_data_booted_summary) with 95%CI determined by "bca" or "perc" method#
+my_data_booted_summary <- my_data_nested %>% mutate(median = purrr::map(.x = booted_ci, ~ .x$t0),#
+	lower_ci_bca = purrr::map(.x = booted_ci,~ .x$bca[[4]]),	#
+	upper_ci_bca = purrr::map(.x = booted_ci,~ .x$bca[[5]]),#
+	lower_ci_perc = purrr::map(.x = booted_ci,~ .x$perc[[4]]),#
+	upper_ci_perc = purrr::map(.x = booted_ci,~ .x$perc[[5]])) %>%  dplyr::select(-data, -booted, -booted_ci) %>% tidyr::unnest()#
+#plot median and 95% CI determined by percentile method#
+bootplot <- ggplot(my_data_booted_summary, aes(x = Condition, y = median)) +   geom_linerange(aes(ymin = lower_ci_perc, ymax = upper_ci_perc), size =2, color = "grey60", data = my_data_booted_summary)+ geom_point(aes(y = median), color = "grey20", size = 4, data = my_data_booted_summary) + ggtitle("Median and 95%CI (bootstrap)") + ylim(0.65,0.95) +ylab("Value [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))#
+#
+################################################################################
+########################## Prepare tables for display ##########################
+#
+#Define the parameters that will be displayed in the table (below quantplot)#
+df_table_quant <- t(data.frame(median=my_data_quant$median, CI_lo=my_data_quant$lower_ci, CI_hi=my_data_quant$upper_ci))#
+colnames(df_table_quant) <- c('Control','01','02')#
+#
+#Define the parameters that will be displayed in the table (below bootplot)#
+df_table_boot <- t(data.frame(median=my_data_booted_summary$median, CI_lo= my_data_booted_summary$lower_ci_perc, CI_hi= my_data_booted_summary$upper_ci_perc))#
+colnames(df_table_boot) <- c('Control','01','02')#
+#
+#Create the table with defined font size set by theme = ttheme_default(8)#
+tbl_quant <- tableGrob(round(df_table_quant, digits=2), theme = ttheme_default(8))#
+tbl_boot <- tableGrob(round(df_table_boot, digits=2), theme = ttheme_default(8))#
+#
+#Set the table width (defined by 1/ncol(tbl))#
+tbl_quant$widths <- unit(rep(0.9/ncol(tbl_quant), ncol(tbl_quant)), "npc")#
+tbl_boot$widths <- unit(rep(0.9/ncol(tbl_boot), ncol(tbl_boot)), "npc")#
+#
+###############################################################################
+########################## Display Plots and Tables ###########################
+#### Arrange the plots and tables on a single page and plot #####
+grid.arrange(quantplot, bootplot, tbl_quant, tbl_boot, ncol=2, nrow=2, as.table=TRUE, heights=c(3,1))#
+###############################################################################
+###### Uncomment to plot the data (dotplot), boxplot and median±CI#
+#ggplot(data =my_data_booted_summary, aes(x = Condition, y = median)) + geom_linerange(data = my_data_booted_summary, aes(x=Condition, ymin=lower_ci_perc, ymax=upper_ci_perc), size=10, alpha=0.3)+ geom_boxplot(data =my_data, aes(x = Condition, y = ratio), fill = NA, notch = TRUE, outlier.color=NA, width=0.4, size=0.6)+ geom_point(data = my_data_booted_summary, aes(x=Condition, y = median), color = "white", size = 4)+ geom_jitter(data = my_data, aes(x=Condition, y=ratio), position=position_jitter(0.1), cex=1, color="grey40")  + ggtitle("Boxplot & data") + ylim(0.5,1.5)+ylab("Value [-]")+theme_light(base_size = 14) + theme(panel.border = element_rect(size = 0.5, linetype = "solid", colour = "black", fill=NA)) + theme(axis.text.y = element_text(size=12))
+qplot(data=df_tidy, x=Time, y=Ratio, geom='line', color=Cell)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(color=Cell))
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell))
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell))
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+ theme_light(base_size = 16) + ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") + ggtitle("G-protein activation by histamine")
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)
+ggplot(df_summary, aes(x=Time, y=mean)) + geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") + geom_line(size=1, alpha=0.8)+ geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+ annotate("rect", xmin=44, xmax=146, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+   geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+   geom_line(size=1, alpha=0.8) +#
+   geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) +#
+   annotate("rect", xmin=44,xmax=146,ymin=-Inf,ymax=Inf, alpha=0.1, fill="black") +#
+   theme_light(base_size = 16) +#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+   ggtitle("G-protein activation by histamine")
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+   geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+   geom_line(size=1, alpha=0.8) +#
+   geom_ribbon(aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2) +#
+   annotate("rect", xmin=44,xmax=146,ymin=-Inf,ymax=Inf, alpha=0.1, fill="black") +#
+   theme_light(base_size = 16) +#
+   ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+   ggtitle("G-protein activation by histamine") + theme(aspect.ratio=4/4)
+update.packages(ask = FALSE, checkBuilt = TRUE)
+getwd()
+df_wide <- read.csv("FRET-ratio-wide.csv", na.strings = "")
+df_tidy <- gather(df_wide, Cell, Ratio, -Time)
+require(tidyr)#
+require(ggplot2)
+df_tidy <- gather(df_wide, Cell, Ratio, -Time)
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(color=Cell)) + geom_point()
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line() + geom_point(aes(color=Cell))
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(group=Cell) + geom_point(aes(color=Cell))
+ggplot(df_tidy, aes(x=Time, y=Ratio)) + geom_line(aes(group=Cell)) + geom_point(aes(color=Cell))
+# Script that:#
+# Reads csv file with header, first column is time. Assumes that each of the other columns#
+# represents a single time-dependent measurement (e.g. the reponse of a single cell)#
+# Caluclates summary statistics per time-point (mean, sd, sem, 95%CI)#
+# Plots time dependent data: single time-dependent measurements, average and error (95%CI)#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#
+#Requires the packages tidyr, ggplot2#
+#
+require(tidyr)#
+require(ggplot2)#
+######################## Set some parameters ##########################
+#Confidence level, typically 95% = 0.95#
+Conf_level <-  0.95#
+#
+#Start and end point of stimulation#
+stim_start <- 44#
+stim_end <- 146#
+#
+######################### import the data ###############################
+#
+#Read a text file (comma separated values)#
+df_wide <- read.csv("FRET-ratio-wide.csv", na.strings = "")#
+#Tidy the data, i.e. long format with each row is variable#
+df_tidy <- gather(df_wide, Cell, Ratio, -Time)#
+#
+#Clear the df.summary dataframe if it exist#
+if (exists("df_summary")) rm(df_summary)#
+######### Calulcate summary statistics to fill dataframe 'df_summary' #########
+# This is tidyverse approach#
+#
+# require(magrittr)#
+# require(dplyr)#
+# df_summary <- df_tidy %>% group_by(Time) %>% summarise(mean = mean(Ratio, na.rm = TRUE),#
+            											# sd = sd(Ratio, na.rm = TRUE),#
+            											# n = n()) %>%#
+  		# mutate(sem = sd / sqrt(n - 1),#
+        # CI_lower = mean + qt((1-Conf_level)/2, n - 1) * sem,#
+        # CI_upper = mean - qt((1-Conf_level)/2, n - 1) * sem)#
+######### Calulcate summary statistics to fill dataframe 'df_summary' #########
+# This is base R approach#
+#
+df_summary <- data.frame(Time=df_wide$Time, n=tapply(df_tidy$Ratio, df_tidy$Time, length), mean=tapply(df_tidy$Ratio, df_tidy$Time, mean))#
+#
+#Add SD and standard error of the mean to the dataframe#
+df_summary$sd <- tapply(df_tidy$Ratio, df_tidy$Time, sd)#
+df_summary$sem <- df_summary$sd/sqrt(df_summary$n-1)#
+#
+#Add 95% CI of the mean to the dataframe#
+df_summary$CI_lower <- df_summary$mean + qt((1-Conf_level)/2, df=df_summary$n-1)*df_summary$sem#
+df_summary$CI_upper <- df_summary$mean - qt((1-Conf_level)/2, df=df_summary$n-1)*df_summary$sem#
+#
+#####################################################
+#
+#### Command to prepare the plot #####
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(x=Time, y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+#
+#
+#### plot s.e.m. of the average response over time #####
+	# geom_ribbon(data=df_summary, aes(ymin=mean-sem, ymax=mean+sem) ,fill="green", alpha=0.5)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+	annotate("rect", xmin=stim_start, xmax=stim_end, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+## Set the Y-axis scale, remove for autoscale#
+#
+	coord_cartesian(ylim = c(0.5, 1.05)) +#
+## Set theme&basic font#
+	theme_light(base_size = 16) +#
+### set the title#
+	ggtitle("Timeseries; average & 95%CI") +#
+### Style the axis (font size)#
+	# theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+### Set layout of the graph #
+	# theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+#
+### Set label of x- and y-axis#
+	ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+### Set aspect ratio of the graph n/n = square#
+	theme(aspect.ratio=4/4)
+# Script that:#
+# Reads csv file with header, first column is time. Assumes that each of the other columns#
+# represents a single time-dependent measurement (e.g. the reponse of a single cell)#
+# Caluclates summary statistics per time-point (mean, sd, sem, 95%CI)#
+# Plots time dependent data: single time-dependent measurements, average and error (95%CI)#
+#
+# Created by: #
+# Joachim Goedhart, @joachimgoedhart, 2018#
+#
+#Requires the packages tidyr, ggplot2#
+#
+require(tidyr)#
+require(ggplot2)#
+######################## Set some parameters ##########################
+#Confidence level, typically 95% = 0.95#
+Conf_level <-  0.95#
+#
+#Start and end point of stimulation#
+stim_start <- 44#
+stim_end <- 146#
+#
+######################### import the data ###############################
+#
+#Read a text file (comma separated values)#
+df_wide <- read.csv("FRET-ratio-wide.csv", na.strings = "")#
+#Tidy the data, i.e. long format with each row is variable#
+df_tidy <- gather(df_wide, Cell, Ratio, -Time)#
+#
+#Clear the df.summary dataframe if it exist#
+if (exists("df_summary")) rm(df_summary)#
+######### Calulcate summary statistics to fill dataframe 'df_summary' #########
+# This is tidyverse approach#
+#
+# require(magrittr)#
+# require(dplyr)#
+# df_summary <- df_tidy %>% group_by(Time) %>% summarise(mean = mean(Ratio, na.rm = TRUE),#
+            											# sd = sd(Ratio, na.rm = TRUE),#
+            											# n = n()) %>%#
+  		# mutate(sem = sd / sqrt(n - 1),#
+        # CI_lower = mean + qt((1-Conf_level)/2, n - 1) * sem,#
+        # CI_upper = mean - qt((1-Conf_level)/2, n - 1) * sem)#
+######### Calulcate summary statistics to fill dataframe 'df_summary' #########
+# This is base R approach#
+#
+df_summary <- data.frame(Time=df_wide$Time, n=tapply(df_tidy$Ratio, df_tidy$Time, length), mean=tapply(df_tidy$Ratio, df_tidy$Time, mean))#
+#
+#Add SD and standard error of the mean to the dataframe#
+df_summary$sd <- tapply(df_tidy$Ratio, df_tidy$Time, sd)#
+df_summary$sem <- df_summary$sd/sqrt(df_summary$n-1)#
+#
+#Add 95% CI of the mean to the dataframe#
+df_summary$CI_lower <- df_summary$mean + qt((1-Conf_level)/2, df=df_summary$n-1)*df_summary$sem#
+df_summary$CI_upper <- df_summary$mean - qt((1-Conf_level)/2, df=df_summary$n-1)*df_summary$sem#
+#
+#####################################################
+#
+#### Command to prepare the plot #####
+ggplot(df_summary, aes(x=Time, y=mean)) +#
+#
+#### plot individual measurements #####
+	geom_line(data=df_tidy, aes(x=Time, y=Ratio, group=Cell), color="grey") +#
+#
+#### plot average response over time #####
+	geom_line(data=df_summary, aes(x=Time, y=mean), size=1, alpha=0.8)+#
+#### plot error (95%CI) of the response over time #####
+	geom_ribbon(data=df_summary, aes(ymin=CI_lower, ymax=CI_upper) ,fill="blue", alpha=0.2)+#
+#
+#### plot s.e.m. of the average response over time #####
+	# geom_ribbon(data=df_summary, aes(ymin=mean-sem, ymax=mean+sem) ,fill="green", alpha=0.5)+#
+#### Draw a filled, transparant rectangle to indicte when stimulation takes place#
+	annotate("rect", xmin=stim_start, xmax=stim_end, ymin=-Inf, ymax=Inf, alpha=0.1, fill="black")+#
+#
+## Set the Y-axis scale, remove for autoscale#
+#
+	coord_cartesian(ylim = c(0.5, 1.05)) +#
+## Set theme&basic font#
+	theme_light(base_size = 16) +#
+### set the title#
+	ggtitle("Timeseries; average & 95%CI") +#
+### Style the axis (font size)#
+	# theme(axis.text.x = element_text(size=16, angle=0, vjust = 0), axis.text.y = element_text(size=16)) +#
+#
+### Set layout of the graph #
+	# theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black", fill=NA)) +#
+#
+### Set label of x- and y-axis#
+	ylab("Ratio YFP/CFP [-]") + xlab("Time [s]") +#
+### Set aspect ratio of the graph n/n = square#
+	theme(aspect.ratio=4/4)
